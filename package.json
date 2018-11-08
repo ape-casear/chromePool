@@ -15,6 +15,7 @@
   "dependencies": {
     "module-alias": "^2.1.0",
     "moment": "^2.22.2",
+    "ps-tree": "^1.1.0",
     "puppeteer": "^1.9.0",
     "request": "^2.88.0",
     "superagent": "^4.0.0-beta.5"
@@ -22,6 +23,7 @@
   "devDependencies": {
     "@types/module-alias": "^2.0.0",
     "@types/moment": "^2.13.0",
+    "@types/ps-tree": "^1.1.0",
     "@types/puppeteer": "^1.9.1",
     "@types/request": "^2.48.0",
     "@types/superagent": "^3.8.4"

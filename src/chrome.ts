@@ -3,9 +3,13 @@ moduleAlias.addAlias('@lib', '../lib/'); */
 import net from "net";
 import * as momentU from "./lib/moment";
 import moment from "moment";
-import { ChildProcess, exec, execSync } from "child_process";
+import psTree from "ps-tree";
+import { ChildProcess, exec, execSync, spawn } from "child_process";
 import { info, warn } from "./lib/log";
 import request from "request";
+import os from "os";
+import http from "http";
+
 const config = require("../config.json");
 
 class Chrome{
@@ -37,12 +41,12 @@ function launch(){
       }
     });
   }
-  const allowcateChrome = async () => {
+  const allowcateChrome = () => {
     let chrome: Chrome | undefined =  chromes.find((chrome: Chrome) => {
       return !chrome.isClosed && !chrome.shouldClose && chrome.path !== undefined;
     })
-    if (chrome) {
-      return chrome;
+    if (chrome ) {
+      return chrome.path ;
     } else {
       return false;
     }
@@ -54,16 +58,18 @@ function launch(){
       })
       for (let chrome of preChrome) {
           info("[start a chrome with port:" + chrome.port + "]");
-          let cmd = "C:\\Users\\ape-caesar\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe --no-sandbox";
-          cmd += ` --remote-debugging-port=${chrome.port}`
-          cmd += ` --headless`
+          // let cmd = "'C:\\Users\\ape-caesar\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe --no-sandbox";
+          let cmd = `D:\\chrome\\Google\\Chrome\\Application\\chrome.exe --no-sandbox`
+          cmd += ` --remote-debugging-port=${chrome.port}`;
+          cmd += ` --headless`;
+          cmd += ``;
           console.log(cmd);
           chrome.execute =  exec(cmd, function(err, stdout, stderr){
             if (err) {
               console.error("**********  error at [runChrome] exec   *************");
               console.error(err)
-              chrome.shouldClose = true;
-              chrome.execute = undefined;
+              // chrome.shouldClose = true;
+              // chrome.execute = undefined;
             }
             info("stdout:" + stdout.toString())
             warn("stderr:" + stderr.toString())
@@ -116,12 +122,16 @@ function launch(){
       chrome.shouldClose = true;
     }
   }
+  /**
+   * close one Chrome totally
+   */
   const closeChrome = async () => {
     let pids: number[] = [];
     while (chromesShouldBeClose.length > 0) {
       const chrome = chromesShouldBeClose.shift();
       if (chrome) {
-        chrome.execute && chrome.execute.kill("SIGKILL");
+        chrome.execute && chrome.execute.kill("SIGINT");
+        info(`killed chrome pid:${chrome.pid}`);
         chrome.execute = undefined;
         chrome.socket = undefined;
         chrome.path = undefined;
@@ -134,33 +144,82 @@ function launch(){
         warn("chrome is undefind at [closeChrome]")
       }
     }
+    /**
+     * kill all childProcesses which parentProcess is pid;
+     */
     await Promise.all(pids.map(pid => {
       return new Promise(res => {
         try {
-          const stdout = execSync(`tasklist`);
-          console.log(stdout.toString());
-          res();
+          psTree(pid, function (err, children) {
+            info(`kill childprocess of chrome of pid:${pid}`);
+            const platform = os.platform();
+            /**
+             * support win32 linux platform for now ..ever
+             */
+            if (platform === "win32") {
+              info(`cmd: taskkill ` + ['/t', '/f', '/pid'].concat(children.map(function (p) { return p.PID })))
+              const pids = children.map(function (p) { return p.PID });
+              for (const pid of pids) {
+                spawn('taskkill', ['/t', '/f', '/pid'].concat(pid));
+              }
+            } else if (platform === "linux") {
+              info(`cmd: kill ` + ['-9'].concat(children.map(function (p) { return p.PID })))
+              psTree(pid, function (err, children) {
+                spawn('kill', ['-9'].concat(children.map(function (p) { return p.PID })));
+              });
+            } else {
+              throw new Error("unsupport platform:" + platform);
+            }
+            
+            setTimeout(res, 2000);
+          });
+          // const stdout = execSync(`tasklist`);
+          // console.log(stdout.toString());
         } catch (e) {
           console.error(e);
           throw Error("**********  error at [closeChrome] tasklist   *************");
         }
-        /* exec(`taskkill /pid ${pid} -t -f`, err => {
-          if (err) {
-            console.error("**********  error at [closeChrome] kill   *************");
-            console.error(err);
-          }
-          res();
-        }) */
       })
     }))
   }
-
+  /**
+   * launch app for connection
+   */
+  const server = http.createServer((req, res) => {
+    if(req.url && req.url.indexOf("/allocationChrome") >= 0) {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({path: allowcateChrome()}));
+    } else if(req.url && req.url.indexOf("/releaseChrome") >= 0) {
+      let path = req.url.split("name=")[1];
+      releaseChrome(path);
+    }
+  }).listen(3333, () => {
+    info(`app start listen at 3333`);
+  })
+  /**
+   * handle upgrade event for puppeteer.connect() function
+   */
+  server.on("upgrade", (req, socket, head) => {
+      socket.write('HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
+                  'Upgrade: WebSocket\r\n' +
+                  'Connection: Upgrade\r\n' +
+                  '\r\n');
+    
+      socket.pipe(socket);
+    }
+  );
+  /**
+   * init chromes
+   */
   const init = () => {
     config.chromes.forEach((chrome: {port: number}) => {
       chromes.push(new Chrome(chrome.port))
     })
   }
   init();
+  /**
+   * launch chromes
+   */
   async function run () {
     while(true) {
       await checkPool();
@@ -169,9 +228,6 @@ function launch(){
       await runChrome();
       console.log("**one tick pass---------->")
     }
-    /* setTimeout(()=>{
-      chromes[0] && console.log(chromes[0]);
-    }, 3000) */
   }
   run();
 };
