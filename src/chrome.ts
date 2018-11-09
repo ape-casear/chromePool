@@ -1,5 +1,3 @@
-/* import * as moduleAlias from "module-alias";
-moduleAlias.addAlias('@lib', '../lib/'); */
 import net from "net";
 import * as momentU from "./lib/moment";
 import moment from "moment";
@@ -33,19 +31,18 @@ const timeout = (ms: number) => new Promise(res => setTimeout(res, ms));
 function launch(){
   const checkPool = async () => {
     chromes.forEach(chrome => {
-      if (chrome.shouldClose === true) {
-        chromesShouldBeClose.push(chrome);
-      }
-      if (moment(chrome.birthTime).isBefore(moment().subtract(8, "seconds"))) {
+      if (chrome.shouldClose === true || moment(chrome.birthTime).isBefore(moment().subtract(1, "minute"))) {
         chromesShouldBeClose.push(chrome);
       }
     });
   }
   const allowcateChrome = () => {
     let chrome: Chrome | undefined =  chromes.find((chrome: Chrome) => {
-      return !chrome.isClosed && !chrome.shouldClose && chrome.path !== undefined;
+      return !chrome.isClosed && !chrome.shouldClose &&
+        chrome.path !== undefined && chrome.startTime === "2000-01-01 00:00:00";
     })
     if (chrome ) {
+      chrome.startTime = momentU.format();
       return chrome.path ;
     } else {
       return false;
@@ -67,45 +64,43 @@ function launch(){
           chrome.execute =  exec(cmd, function(err, stdout, stderr){
             if (err) {
               console.error("**********  error at [runChrome] exec   *************");
-              console.error(err)
-              // chrome.shouldClose = true;
-              // chrome.execute = undefined;
+              // console.error(err)
             }
             info("stdout:" + stdout.toString())
             warn("stderr:" + stderr.toString())
-            // await timeout(1000);
           });
           chrome.execute.on("close", (code, signal) => {
             console.error("**********  error at [runChrome] listen on close   *************");
             console.error(`killed by ${signal}`);
-            // chrome.shouldClose = true;
           })
           chrome.execute.on("error", (err) => {
             console.error("**********  error at [runChrome] listen on error   *************");
             console.error(err);
-            // chrome.shouldClose = true;
           })
           chrome.pid = chrome.execute.pid;
-          await timeout(1000);
-          request(
-            {
-              timeout: 3000,
-              url: `http://127.0.0.1:${chrome.port}/json/version`
-            },
-            (err: Error, res: request.Response, body: any) => {
-            if (err) {
-              console.error("**********  error at [runChrome] request.end   *************");
-              console.error(err)
-              chrome.shouldClose = true;
-              chrome.execute = undefined;
-            }
-            if (typeof body === "string") {
-              body = JSON.parse(body);
-            }
-            chrome.path = body.webSocketDebuggerUrl;
-            chrome.birthTime = momentU.format();
-            chrome.isClosed = false;
-          })
+          await new Promise(resolve => {
+            request(
+              {
+                timeout: 3000,
+                url: `http://127.0.0.1:${chrome.port}/json/version`
+              },
+              (err: Error, res: request.Response, body: any) => {
+              if (err) {
+                console.error("**********  error at [runChrome] request.end   *************");
+                console.error(err)
+                chrome.shouldClose = true;
+                chrome.execute = undefined;
+                throw err;
+              }
+              if (typeof body === "string") {
+                body = JSON.parse(body);
+              }
+              chrome.path = body.webSocketDebuggerUrl;
+              chrome.birthTime = momentU.format();
+              chrome.isClosed = false;
+              resolve();
+            })
+          }).catch(e => process.exit(1))
       }
       
     } catch (e) {
@@ -138,6 +133,7 @@ function launch(){
         chrome.birthTime = undefined;
         chrome.isClosed = true;
         chrome.startTime = "2000-01-01 00:00:00";
+        chrome.shouldClose = false;
         chrome.pid && pids.push(chrome.pid);
         chrome.pid = undefined;
       } else {
@@ -145,12 +141,16 @@ function launch(){
       }
     }
     /**
-     * kill all childProcesses which parentProcess is pid;
+     * kill all childProcesses which parentProcess is 'pid';
      */
     await Promise.all(pids.map(pid => {
       return new Promise(res => {
         try {
           psTree(pid, function (err, children) {
+            if (err) {
+              console.error(err);
+              throw err;
+            }
             info(`kill childprocess of chrome of pid:${pid}`);
             const platform = os.platform();
             /**
@@ -159,8 +159,8 @@ function launch(){
             if (platform === "win32") {
               info(`cmd: taskkill ` + ['/t', '/f', '/pid'].concat(children.map(function (p) { return p.PID })))
               const pids = children.map(function (p) { return p.PID });
-              for (const pid of pids) {
-                spawn('taskkill', ['/t', '/f', '/pid'].concat(pid));
+              for (const _pid of pids) {
+                spawn('taskkill', ['/t', '/f', '/pid'].concat(_pid));
               }
             } else if (platform === "linux") {
               info(`cmd: kill ` + ['-9'].concat(children.map(function (p) { return p.PID })))
@@ -192,6 +192,8 @@ function launch(){
     } else if(req.url && req.url.indexOf("/releaseChrome") >= 0) {
       let path = req.url.split("name=")[1];
       releaseChrome(path);
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({msg: "ok"}));
     }
   }).listen(3333, () => {
     info(`app start listen at 3333`);
@@ -226,6 +228,13 @@ function launch(){
       await closeChrome();
       await timeout(2000);
       await runChrome();
+      console.log(`birthTime: ${chromes[0].birthTime}`);
+      console.log(`path: ${chromes[0].path}`);
+      console.log(`startTime: ${chromes[0].startTime}`);
+      console.log(`isClosed: ${chromes[0].isClosed}`);
+      console.log(`shouldClose: ${chromes[0].shouldClose}`);
+      console.log(`pid: ${chromes[0].pid}`);
+
       console.log("**one tick pass---------->")
     }
   }
